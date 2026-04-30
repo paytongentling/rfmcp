@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "buybox-mcp"
+version = "0.1.0"
+description = "Buy Box MCP server scaffold with bearer auth and Render deployment."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [
+  { name = "Payton Huhta" }
+]
+dependencies = [
+  "mcp[cli]>=1.27.0,<2.0.0",
+  "pydantic-settings>=2.13.1,<3.0.0",
+  "pymongo>=4.16.0,<5.0.0",
+  "uvicorn>=0.43.0,<0.44.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28.1,<0.29.0",
+  "pytest>=8.4.0,<9.0.0",
+  "pytest-asyncio>=1.1.0,<2.0.0",
+  "ruff>=0.12.0,<0.13.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/buybox_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
