@@ -1,0 +1,28 @@
+previews:
+  generation: off
+
+services:
+  - type: web
+    name: buybox-mcp
+    runtime: python
+    plan: starter
+    region: oregon
+    autoDeployTrigger: commit
+    buildCommand: pip install .
+    startCommand: python -m buybox_mcp
+    healthCheckPath: /healthz
+    envVars:
+      - key: BUYBOX_MCP_ENV
+        value: production
+      - key: BUYBOX_MCP_HOST
+        value: 0.0.0.0
+      - key: BUYBOX_MCP_PORT
+        value: "10000"
+      - key: BUYBOX_MCP_LOG_LEVEL
+        value: INFO
+      - key: BUYBOX_MCP_BEARER_TOKEN
+        sync: false
+      - key: BUYBOX_MCP_MONGO_URI
+        sync: false
+      - key: BUYBOX_MCP_MONGO_DATABASE
+        value: bb2
