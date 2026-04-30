@@ -7,6 +7,7 @@ import pytest
 
 from buybox_mcp.app import create_app
 from buybox_mcp.config import Settings
+from buybox_mcp.server import create_mcp_server
 
 
 def build_settings() -> Settings:
@@ -53,3 +54,19 @@ async def test_root_exposes_connection_info() -> None:
     body = response.json()
     assert body["mcp_url"] == "https://example.com/mcp"
     assert body["auth"]["type"] == "bearer"
+
+
+def test_streamable_http_host_tracks_settings() -> None:
+    server = create_mcp_server(
+        Settings(
+            bearer_token="test-token",
+            mongo_uri=None,
+            mongo_database=None,
+            host="0.0.0.0",
+            port=10000,
+        )
+    )
+
+    assert server.settings.host == "0.0.0.0"
+    assert server.settings.port == 10000
+    assert server.settings.transport_security is None
