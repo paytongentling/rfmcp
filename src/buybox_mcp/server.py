@@ -354,6 +354,8 @@ def create_mcp_server(settings: Settings | None = None) -> FastMCP:
             "Use find_documents for direct document lookup, distinct_values for field discovery, and "
             "aggregate_documents for grouped or time-series analysis. All Mongo access is read-only."
         ),
+        host=resolved.host,
+        port=resolved.port,
         stateless_http=True,
         json_response=True,
         streamable_http_path="/",
