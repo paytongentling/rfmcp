@@ -1,0 +1,20 @@
+{
+  "name": "buybox-mcp-oauth-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare Worker that fronts the Render-hosted Buy Box MCP server with OAuth 2.1 (Google upstream).",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "^0.4.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250129.0",
+    "typescript": "^5.6.3",
+    "wrangler": "^4.0.0"
+  }
+}

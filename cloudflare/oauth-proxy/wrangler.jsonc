@@ -1,0 +1,25 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "buybox-mcp-oauth-proxy",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-04-01",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"workers_dev": true,
+	"kv_namespaces": [
+		{
+			"binding": "OAUTH_KV",
+			"id": "663307ffb43343f2b7de049fcc31ff89",
+			"remote": true
+		}
+	],
+	"vars": {
+		"MCP_ORIGIN": "https://buybox-mcp-v2.onrender.com",
+		"ALLOWED_HD": "gentling.ai"
+	}
+	// Secrets (set via `wrangler secret put`):
+	//   GOOGLE_CLIENT_ID
+	//   GOOGLE_CLIENT_SECRET
+	//   MCP_ORIGIN_BEARER
+}
