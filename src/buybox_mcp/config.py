@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     )
 
     env: str = "development"
-    app_name: str = "Buy Box MCP"
+    app_name: str = "Buy Box Analytics MCP"
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "INFO"
@@ -40,6 +40,14 @@ class Settings(BaseSettings):
             "BUYBOX_MCP_MONGO_DATABASE",
             "MONGODB_DATABASE",
             "MONGO_DATABASE",
+        ),
+    )
+    inventory_mongo_database: str | None = Field(
+        default="INV-Tracker",
+        validation_alias=AliasChoices(
+            "BUYBOX_MCP_INVENTORY_MONGO_DATABASE",
+            "INVENTORY_MONGODB_DATABASE",
+            "INVENTORY_MONGO_DATABASE",
         ),
     )
     mcp_mount_path: str = "/mcp"

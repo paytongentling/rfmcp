@@ -3,7 +3,7 @@ previews:
 
 services:
   - type: web
-    name: buybox-mcp
+    name: buybox-mcp-v2
     runtime: python
     plan: starter
     region: oregon
