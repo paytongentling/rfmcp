@@ -9,6 +9,7 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
 from buybox_mcp.config import Settings, get_settings
+from buybox_mcp.fedex import FedexApiError, FedexNotConfiguredError
 from buybox_mcp.runtime import ApplicationRuntime, get_runtime
 
 MAX_FIND_LIMIT = 200
@@ -448,6 +449,34 @@ class InventoryLocationFreshness(BaseModel):
 class InventoryFreshnessSummary(BaseModel):
     selected_location: ResolvedInventoryLocation | None = None
     locations: list[InventoryLocationFreshness]
+    notes: list[str]
+
+
+class FedexRateOffer(BaseModel):
+    service_type: str
+    service_name: str
+    account_rate_usd: float | None = None
+    list_rate_usd: float | None = None
+    currency: str | None = None
+    committed_delivery_at: str | None = None
+    committed_delivery_dow: str | None = None
+    saturday_delivery: bool | None = None
+    destination_airport_id: str | None = None
+    money_back_guarantee_eligible: bool | None = None
+
+
+class FedexRateQuoteSummary(BaseModel):
+    api_base: str
+    account_number: str
+    origin_postal_code: str
+    destination_postal_code: str
+    ship_date: str | None
+    weight_lb: float
+    dimensions_in: dict[str, float] | None = None
+    pickup_type: str
+    packaging_type: str
+    services_returned: int
+    offers: list[FedexRateOffer]
     notes: list[str]
 
 
@@ -5113,6 +5142,199 @@ def create_mcp_server(settings: Settings | None = None) -> FastMCP:
             limit_applied=normalized_limit,
             pipeline_executed=_jsonable(pipeline_to_run),
             documents=_jsonable(documents),
+        )
+
+    @mcp.tool(
+        title="FedEx Rates and Delivery Promise",
+        description=(
+            "Get FedEx pricing AND committed delivery date/time for any origin->destination "
+            "shipment, across every available service tier (Ground, Express Saver, 2Day, 2Day AM, "
+            "Standard Overnight, Priority Overnight, First Overnight). Returns both account-rated "
+            "(your contract discounts) and list rates, plus the committed delivery timestamp per "
+            "service so you can pick the cheapest tier that still meets a deadline. "
+            "Standing assumptions (matching our 3PL workflow): pickupType=USE_SCHEDULED_PICKUP "
+            "(daily pickup already on the schedule), packagingType=YOUR_PACKAGING, no signature. "
+            "Useful for landed-cost analysis per ASIN, choosing service tier by deadline, "
+            "answering 'how much to ship X to ZIP Y by date Z'."
+        ),
+        structured_output=False,
+    )
+    async def fedex_rates_and_promise(
+        origin_zip: Annotated[
+            str,
+            Field(description="Origin postal code (US 5-digit zip).", min_length=3, max_length=10),
+        ],
+        dest_zip: Annotated[
+            str,
+            Field(description="Destination postal code (US 5-digit zip).", min_length=3, max_length=10),
+        ],
+        weight_lb: Annotated[
+            float,
+            Field(description="Package weight in pounds.", gt=0, le=150),
+        ],
+        ship_date: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Date the package will be picked up, formatted YYYY-MM-DD. "
+                    "Defaults to today if omitted."
+                ),
+                pattern=r"^\d{4}-\d{2}-\d{2}$",
+            ),
+        ] = None,
+        length_in: Annotated[
+            float | None,
+            Field(description="Package length in inches. If any dimension is set, all three must be set.", gt=0),
+        ] = None,
+        width_in: Annotated[
+            float | None,
+            Field(description="Package width in inches.", gt=0),
+        ] = None,
+        height_in: Annotated[
+            float | None,
+            Field(description="Package height in inches.", gt=0),
+        ] = None,
+        service_type: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional FedEx service code to filter to a single tier, e.g. FEDEX_GROUND, "
+                    "FEDEX_2_DAY, FEDEX_2_DAY_AM, FEDEX_EXPRESS_SAVER, STANDARD_OVERNIGHT, "
+                    "PRIORITY_OVERNIGHT, FIRST_OVERNIGHT. Omit to get all available tiers."
+                ),
+            ),
+        ] = None,
+        saturday_delivery: Annotated[
+            bool,
+            Field(description="Request Saturday delivery as a special service. Default false."),
+        ] = False,
+        origin_country: Annotated[
+            str,
+            Field(description="ISO-2 country code for origin. Default US.", min_length=2, max_length=2),
+        ] = "US",
+        dest_country: Annotated[
+            str,
+            Field(description="ISO-2 country code for destination. Default US.", min_length=2, max_length=2),
+        ] = "US",
+    ) -> FedexRateQuoteSummary:
+        runtime = get_runtime()
+        client = runtime.fedex_client
+        if client is None or not client.configured:
+            raise FedexNotConfiguredError(
+                "FedEx credentials are not configured on this server. Set FEDEX_API_KEY, "
+                "FEDEX_API_SECRET, and FEDEX_ACCOUNT_NUMBER in the environment."
+            )
+
+        dims_set = (length_in, width_in, height_in)
+        any_dim = any(d is not None for d in dims_set)
+        all_dims = all(d is not None for d in dims_set)
+        if any_dim and not all_dims:
+            raise ValueError(
+                "Provide all three of length_in, width_in, height_in, or none of them."
+            )
+
+        try:
+            payload = await client.quote_rates(
+                origin_zip=origin_zip,
+                dest_zip=dest_zip,
+                weight_lb=weight_lb,
+                ship_date=ship_date,
+                length_in=length_in,
+                width_in=width_in,
+                height_in=height_in,
+                service_type=service_type,
+                saturday_delivery=saturday_delivery,
+                origin_country=origin_country,
+                dest_country=dest_country,
+            )
+        except FedexApiError as exc:
+            raise RuntimeError(
+                f"FedEx rate request failed ({exc.code}): {exc.message}"
+            ) from exc
+
+        offers: list[FedexRateOffer] = []
+        for entry in payload.get("output", {}).get("rateReplyDetails", []) or []:
+            commit = entry.get("commit") or {}
+            date_detail = commit.get("dateDetail") or {}
+            dest_detail = commit.get("derivedDestinationDetail") or {}
+            op_detail = entry.get("operationalDetail") or {}
+
+            account_rate: float | None = None
+            list_rate: float | None = None
+            currency: str | None = None
+            for shipment_detail in entry.get("ratedShipmentDetails", []) or []:
+                rate_type = shipment_detail.get("rateType", "")
+                charge = shipment_detail.get("totalNetCharge")
+                if charge is None:
+                    continue
+                try:
+                    charge_value = float(charge)
+                except (TypeError, ValueError):
+                    continue
+                currency = shipment_detail.get("currency", currency)
+                if "ACCOUNT" in rate_type:
+                    account_rate = charge_value
+                elif "LIST" in rate_type or "RATED" in rate_type:
+                    list_rate = charge_value if list_rate is None else list_rate
+                else:
+                    if account_rate is None:
+                        account_rate = charge_value
+
+            offers.append(
+                FedexRateOffer(
+                    service_type=entry.get("serviceType", ""),
+                    service_name=entry.get("serviceName", ""),
+                    account_rate_usd=account_rate,
+                    list_rate_usd=list_rate,
+                    currency=currency,
+                    committed_delivery_at=date_detail.get("dayFormat"),
+                    committed_delivery_dow=date_detail.get("dayOfWeek"),
+                    saturday_delivery=commit.get("saturdayDelivery"),
+                    destination_airport_id=dest_detail.get("airportId"),
+                    money_back_guarantee_eligible=(
+                        not op_detail.get("ineligibleForMoneyBackGuarantee")
+                        if "ineligibleForMoneyBackGuarantee" in op_detail
+                        else None
+                    ),
+                )
+            )
+
+        offers.sort(
+            key=lambda o: (
+                o.account_rate_usd if o.account_rate_usd is not None else float("inf")
+            )
+        )
+
+        dims_payload: dict[str, float] | None = None
+        if all_dims:
+            assert length_in is not None and width_in is not None and height_in is not None
+            dims_payload = {"length": length_in, "width": width_in, "height": height_in}
+
+        notes = [
+            "Pricing comes back with both account-rated (your contract) and list rates when available.",
+            "committed_delivery_at is the FedEx-committed local delivery timestamp; null means transit time was not returned for that tier.",
+            "Pickup type is USE_SCHEDULED_PICKUP, which assumes the 3PL has a daily pickup already on the schedule. Switch the server config if that ever changes.",
+            "money_back_guarantee_eligible is best-effort: null when FedEx did not return that detail for the service.",
+        ]
+
+        account_value = runtime.settings.fedex_account_number or ""
+        masked_account = (
+            f"****{account_value[-4:]}" if len(account_value) >= 4 else account_value
+        )
+
+        return FedexRateQuoteSummary(
+            api_base=runtime.settings.fedex_api_base,
+            account_number=masked_account,
+            origin_postal_code=origin_zip,
+            destination_postal_code=dest_zip,
+            ship_date=ship_date,
+            weight_lb=weight_lb,
+            dimensions_in=dims_payload,
+            pickup_type="USE_SCHEDULED_PICKUP",
+            packaging_type="YOUR_PACKAGING",
+            services_returned=len(offers),
+            offers=offers,
+            notes=notes,
         )
 
     return mcp

@@ -26,3 +26,11 @@ services:
         sync: false
       - key: BUYBOX_MCP_MONGO_DATABASE
         value: bb2
+      - key: BUYBOX_MCP_FEDEX_API_KEY
+        sync: false
+      - key: BUYBOX_MCP_FEDEX_API_SECRET
+        sync: false
+      - key: BUYBOX_MCP_FEDEX_ACCOUNT_NUMBER
+        sync: false
+      - key: BUYBOX_MCP_FEDEX_API_BASE
+        value: https://apis-sandbox.fedex.com

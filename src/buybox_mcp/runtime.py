@@ -6,6 +6,7 @@ from typing import Any
 from pymongo import AsyncMongoClient
 
 from buybox_mcp.config import Settings
+from buybox_mcp.fedex import FedexClient
 
 
 @dataclass
@@ -13,9 +14,12 @@ class ApplicationRuntime:
     settings: Settings
     mongo_client: AsyncMongoClient[dict[str, Any]] | None = None
     mongo_database: Any | None = None
+    fedex_client: FedexClient | None = None
     startup_errors: list[str] = field(default_factory=list)
 
     async def start(self) -> None:
+        self.fedex_client = FedexClient(self.settings)
+
         if not self.settings.mongo_uri:
             return
 
@@ -30,6 +34,8 @@ class ApplicationRuntime:
     async def stop(self) -> None:
         if self.mongo_client is not None:
             await self.mongo_client.close()
+        if self.fedex_client is not None:
+            await self.fedex_client.aclose()
 
     async def health_snapshot(self) -> dict[str, Any]:
         mongo = {

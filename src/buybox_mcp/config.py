@@ -54,6 +54,35 @@ class Settings(BaseSettings):
     health_path: str = "/healthz"
     cors_allowed_origins: tuple[str, ...] = ()
 
+    fedex_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "BUYBOX_MCP_FEDEX_API_KEY",
+            "FEDEX_API_KEY",
+        ),
+    )
+    fedex_api_secret: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "BUYBOX_MCP_FEDEX_API_SECRET",
+            "FEDEX_API_SECRET",
+        ),
+    )
+    fedex_account_number: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "BUYBOX_MCP_FEDEX_ACCOUNT_NUMBER",
+            "FEDEX_ACCOUNT_NUMBER",
+        ),
+    )
+    fedex_api_base: str = Field(
+        default="https://apis-sandbox.fedex.com",
+        validation_alias=AliasChoices(
+            "BUYBOX_MCP_FEDEX_API_BASE",
+            "FEDEX_API_BASE",
+        ),
+    )
+
     @field_validator("cors_allowed_origins", mode="before")
     @classmethod
     def parse_cors_allowed_origins(cls, value: object) -> tuple[str, ...]:
