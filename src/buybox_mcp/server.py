@@ -480,6 +480,32 @@ class FedexRateQuoteSummary(BaseModel):
     notes: list[str]
 
 
+class FedexResolvedAddress(BaseModel):
+    street_lines: list[str]
+    city: str | None = None
+    state_or_province_code: str | None = None
+    postal_code: str | None = None
+    country_code: str | None = None
+    classification: str | None = None
+    resolved: bool | None = None
+    deliverable: bool | None = None
+    dpv: bool | None = None
+    po_box: bool | None = None
+    interpolated: bool | None = None
+    matched: bool | None = None
+    attributes: dict[str, str]
+    customer_messages: list[str]
+
+
+class FedexAddressValidationSummary(BaseModel):
+    api_base: str
+    input_address: dict[str, Any]
+    candidates_returned: int
+    primary: FedexResolvedAddress | None = None
+    candidates: list[FedexResolvedAddress]
+    notes: list[str]
+
+
 KNOWN_COLLECTION_HINTS: dict[str, CollectionHint] = {
     "bb2_offers": CollectionHint(
         category="buybox",
@@ -5334,6 +5360,150 @@ def create_mcp_server(settings: Settings | None = None) -> FastMCP:
             packaging_type="YOUR_PACKAGING",
             services_returned=len(offers),
             offers=offers,
+            notes=notes,
+        )
+
+    @mcp.tool(
+        title="FedEx Validate Address",
+        description=(
+            "Standardize and classify a postal address via FedEx Address Validation. "
+            "Returns the FedEx-resolved street lines / city / state / postal code, plus "
+            "classification (RESIDENTIAL vs BUSINESS — drives Ground residential surcharges), "
+            "deliverability flags (DPV-confirmed, PO Box, interpolated street number), and "
+            "any customer-facing messages. Use this BEFORE fedex_rates_and_promise to catch "
+            "bad buyer addresses cheaply, and to know whether to apply a residential rate."
+        ),
+        structured_output=False,
+    )
+    async def fedex_validate_address(
+        street_lines: Annotated[
+            list[str],
+            Field(
+                description=(
+                    "Up to 3 street address lines, in order (e.g. ['123 Main St', 'Apt 4B']). "
+                    "Pass an empty list to validate by city/state/postal alone."
+                ),
+                max_length=3,
+            ),
+        ],
+        city: Annotated[
+            str | None,
+            Field(description="City name, optional but improves resolution."),
+        ] = None,
+        state: Annotated[
+            str | None,
+            Field(
+                description="2-letter state or province code (e.g. NY, CA, ON).",
+                min_length=2,
+                max_length=2,
+            ),
+        ] = None,
+        postal_code: Annotated[
+            str | None,
+            Field(
+                description="Postal code (US 5-digit zip or zip+4).",
+                min_length=3,
+                max_length=10,
+            ),
+        ] = None,
+        country: Annotated[
+            str,
+            Field(
+                description="ISO-2 country code. Default US.",
+                min_length=2,
+                max_length=2,
+            ),
+        ] = "US",
+    ) -> FedexAddressValidationSummary:
+        runtime = get_runtime()
+        client = runtime.fedex_client
+        if client is None or not client.configured:
+            raise FedexNotConfiguredError(
+                "FedEx credentials are not configured on this server. Set FEDEX_API_KEY, "
+                "FEDEX_API_SECRET, and FEDEX_ACCOUNT_NUMBER in the environment."
+            )
+
+        try:
+            payload = await client.validate_address(
+                street_lines=list(street_lines),
+                city=city,
+                state=state,
+                postal_code=postal_code,
+                country=country,
+            )
+        except FedexApiError as exc:
+            raise RuntimeError(
+                f"FedEx address validation failed ({exc.code}): {exc.message}"
+            ) from exc
+
+        def _to_bool(raw: Any) -> bool | None:
+            if raw is None:
+                return None
+            if isinstance(raw, bool):
+                return raw
+            if isinstance(raw, str):
+                value = raw.strip().lower()
+                if value in {"true", "yes", "y", "1"}:
+                    return True
+                if value in {"false", "no", "n", "0"}:
+                    return False
+            return None
+
+        candidates: list[FedexResolvedAddress] = []
+        for entry in payload.get("output", {}).get("resolvedAddresses", []) or []:
+            attrs_raw = entry.get("attributes") or {}
+            attrs: dict[str, str] = {
+                str(k): str(v) for k, v in attrs_raw.items() if v is not None
+            }
+            messages: list[str] = []
+            for msg in entry.get("customerMessages", []) or []:
+                text = msg.get("message") if isinstance(msg, dict) else None
+                if text:
+                    messages.append(str(text))
+            street_tokens = entry.get("streetLinesToken") or entry.get("streetLines") or []
+            candidates.append(
+                FedexResolvedAddress(
+                    street_lines=[str(s) for s in street_tokens],
+                    city=entry.get("city"),
+                    state_or_province_code=entry.get("stateOrProvinceCode"),
+                    postal_code=entry.get("postalCode"),
+                    country_code=entry.get("countryCode"),
+                    classification=entry.get("classification"),
+                    resolved=_to_bool(attrs.get("Resolved")),
+                    deliverable=_to_bool(attrs.get("DeliveryPointValidation"))
+                    if "DeliveryPointValidation" in attrs
+                    else _to_bool(attrs.get("Deliverable")),
+                    dpv=_to_bool(attrs.get("DPV")),
+                    po_box=_to_bool(attrs.get("POBox")),
+                    interpolated=_to_bool(attrs.get("InterpolatedStreetAddress")),
+                    matched=_to_bool(attrs.get("Matched")),
+                    attributes=attrs,
+                    customer_messages=messages,
+                )
+            )
+
+        primary = candidates[0] if candidates else None
+
+        notes = [
+            "FedEx returns one or more resolvedAddresses; the first is treated as the primary candidate.",
+            "classification=RESIDENTIAL means a Ground residential surcharge applies; BUSINESS does not.",
+            "DPV/Deliverable=false signals USPS could not confirm the delivery point — usually a bad address.",
+            "POBox=true means FedEx Ground/Express cannot deliver; use SmartPost or USPS instead.",
+            "InterpolatedStreetAddress=true means the street number was guessed via range — risky for label printing.",
+        ]
+
+        return FedexAddressValidationSummary(
+            api_base=runtime.settings.fedex_api_base,
+            input_address={
+                "street_lines": list(street_lines),
+                "city": city,
+                "state": state,
+                "postal_code": postal_code,
+                "country": country,
+            },
+            candidates_returned=len(candidates),
+            primary=primary,
+            candidates=candidates,
             notes=notes,
         )
 
