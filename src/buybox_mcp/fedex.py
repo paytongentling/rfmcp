@@ -168,3 +168,52 @@ class FedexClient:
                 http_status=resp.status_code,
             )
         return payload
+
+    async def validate_address(
+        self,
+        *,
+        street_lines: list[str],
+        city: str | None = None,
+        state: str | None = None,
+        postal_code: str | None = None,
+        country: str = "US",
+    ) -> dict[str, Any]:
+        """Call /address/v1/addresses/resolve and return the parsed JSON response.
+
+        Use to standardize a buyer-supplied address, classify it as residential
+        vs business (a Ground rate input), and detect undeliverable / interpolated
+        / PO Box situations before paying for a Rate call or printing a label.
+        """
+
+        token = await self._get_token()
+        address: dict[str, Any] = {"countryCode": country}
+        if street_lines:
+            address["streetLines"] = street_lines
+        if city is not None:
+            address["city"] = city
+        if state is not None:
+            address["stateOrProvinceCode"] = state
+        if postal_code is not None:
+            address["postalCode"] = postal_code
+
+        body = {"addressesToValidate": [{"address": address}]}
+
+        resp = await self._http.post(
+            f"{self._settings.fedex_api_base}/address/v1/addresses/resolve",
+            headers={
+                "Content-Type": "application/json",
+                "X-locale": "en_US",
+                "Authorization": f"Bearer {token}",
+            },
+            json=body,
+        )
+        payload = resp.json()
+        if resp.status_code >= 400 or "errors" in payload:
+            errors = payload.get("errors") or [{"code": "HTTP.ERROR", "message": resp.text[:200]}]
+            err = errors[0]
+            raise FedexApiError(
+                err.get("code", "ADDRESS.ERROR"),
+                err.get("message", "Address validation request failed"),
+                http_status=resp.status_code,
+            )
+        return payload
